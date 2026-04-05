@@ -31,11 +31,27 @@ if not Config then
         FarmMode = "Mob",
         MobFarm = { Enabled = true, SelectedMobs = {} },
         BossFarm = { Enabled = false },
-        Priority = {"Boss", "Pity Boss", "Summon", "Level Farm", "All Mob Farm", "Mob", "Merchant"},
+        Priority = {"Mob", "Level Farm", "All Mob Farm", "Boss"},
         AutoFeatures = { M1 = true, M1Speed = 0.35, Haki = { Observation = false, Armament = false, Conqueror = false } },
-        Movement = { Type = "Tween", Speed = 180, PositionType = "Front", Distance = 10, IslandTP = true, IslandTPCD = 0.67 },
-        Misc = { Notifications = true }
+        Movement = { Type = "Tween", Speed = 160, PositionType = "Behind", Distance = 6, IslandTP = true, IslandTPCD = 0.67, TargetTPCD = 0 },
+        LevelFarm = { Enabled = true, AutoQuest = true, UseForTargeting = false },
+        LevelRules = { Enabled = true, MobSelectFarmLevelMax = 50, MeleeOnlyLevelMax = 200 },
+        Misc = { AntiAFK = true, StopConditions = { Level = 0, Money = 0, Gems = 0 } }
     }
+end
+
+local SnapshotDefaultWeaponTypes = {}
+
+do
+    Config.Misc = Config.Misc or {}
+    Config.Misc.StopConditions = Config.Misc.StopConditions or { Level = 0, Money = 0, Gems = 0 }
+    Config.LevelFarm = Config.LevelFarm or { Enabled = false, AutoQuest = false, UseForTargeting = false }
+    Config.LevelRules = Config.LevelRules or { Enabled = false }
+    Config.Instakill = Config.Instakill or { Enabled = false, Type = "V2", HPPercent = 90, MinMaxHP = 100000 }
+    Config.MobFarm = Config.MobFarm or {}
+    for _, t in ipairs(Config.MobFarm.WeaponTypes or { "Sword", "Melee" }) do
+        table.insert(SnapshotDefaultWeaponTypes, t)
+    end
 end
 
 -- ============================================
@@ -64,6 +80,13 @@ local Players = Services.Players
 local Plr = Players.LocalPlayer
 local Char = Plr.Character or Plr.CharacterAdded:Wait()
 local PGui = Plr:WaitForChild("PlayerGui")
+local PATH = {
+    Mobs = workspace:WaitForChild("NPCs", 90),
+}
+if not PATH.Mobs then
+    PATH.Mobs = workspace
+end
+
 local RS = Services.ReplicatedStorage
 local RunService = Services.RunService
 local HttpService = Services.HttpService
@@ -155,7 +178,7 @@ end
 
 local function GetNPCs()
     local npcs = {}
-    local npcFolder = workspace:FindFirstChild("NPCs")
+    local npcFolder = PATH.Mobs
     if npcFolder then
         for _, npc in pairs(npcFolder:GetChildren()) do
             if IsNPCAlive(npc) then
@@ -232,6 +255,7 @@ local Remotes = {
     QuestAccept = GetRemote(RS, "RemoteEvents.QuestAccept"),
     QuestAbandon = GetRemote(RS, "RemoteEvents.QuestAbandon"),
     ReqInventory = GetRemote(RS, "Remotes.RequestInventory"),
+    SettingsToggle = GetRemote(RS, "RemoteEvents.SettingsToggle"),
 }
 
 -- ============================================
@@ -247,42 +271,60 @@ local Modules = {
 }
 
 -- ============================================
--- ISLAND / PORTAL SYSTEM
+-- ISLAND / PORTAL (crystal map giống script gốc)
 -- ============================================
-local IslandMap = {
-    ["Starter"] = {CFrame = CFrame.new(0, 27, 0), Portal = nil},
-    ["Jungle"] = {CFrame = CFrame.new(2000, 27, 0), Portal = nil},
-    ["Desert"] = {CFrame = CFrame.new(4000, 27, 0), Portal = nil},
-    ["Snow"] = {CFrame = CFrame.new(6000, 27, 0), Portal = nil},
-    ["Sailor"] = {CFrame = CFrame.new(8000, 27, 0), Portal = nil},
-    ["Shibuya"] = {CFrame = CFrame.new(10000, 27, 0), Portal = nil},
-    ["HuecoMundo"] = {CFrame = CFrame.new(12000, 27, 0), Portal = nil},
-    ["Boss"] = {CFrame = CFrame.new(14000, 27, 0), Portal = nil},
-    ["Dungeon"] = {CFrame = CFrame.new(16000, 27, 0), Portal = nil},
+local IslandCrystals = {
+    ["Starter"] = workspace:FindFirstChild("StarterIsland") and workspace.StarterIsland:FindFirstChild("SpawnPointCrystal_Starter"),
+    ["Jungle"] = workspace:FindFirstChild("JungleIsland") and workspace.JungleIsland:FindFirstChild("SpawnPointCrystal_Jungle"),
+    ["Desert"] = workspace:FindFirstChild("DesertIsland") and workspace.DesertIsland:FindFirstChild("SpawnPointCrystal_Desert"),
+    ["Snow"] = workspace:FindFirstChild("SnowIsland") and workspace.SnowIsland:FindFirstChild("SpawnPointCrystal_Snow"),
+    ["Sailor"] = workspace:FindFirstChild("SailorIsland") and workspace.SailorIsland:FindFirstChild("SpawnPointCrystal_Sailor"),
+    ["Shibuya"] = workspace:FindFirstChild("ShibuyaStation") and workspace.ShibuyaStation:FindFirstChild("SpawnPointCrystal_Shibuya"),
+    ["HuecoMundo"] = workspace:FindFirstChild("HuecoMundo") and workspace.HuecoMundo:FindFirstChild("SpawnPointCrystal_HuecoMundo"),
+    ["Boss"] = workspace:FindFirstChild("BossIsland") and workspace.BossIsland:FindFirstChild("SpawnPointCrystal_Boss"),
+    ["Dungeon"] = workspace:FindFirstChild("Main Temple") and workspace["Main Temple"]:FindFirstChild("SpawnPointCrystal_Dungeon"),
+    ["Shinjuku"] = workspace:FindFirstChild("ShinjukuIsland") and workspace.ShinjukuIsland:FindFirstChild("SpawnPointCrystal_Shinjuku"),
+    ["Valentine"] = workspace:FindFirstChild("ValentineIsland") and workspace.ValentineIsland:FindFirstChild("SpawnPointCrystal_Valentine"),
+    ["Slime"] = workspace:FindFirstChild("SlimeIsland") and workspace.SlimeIsland:FindFirstChild("SpawnPointCrystal_Slime"),
+    ["Academy"] = workspace:FindFirstChild("AcademyIsland") and workspace.AcademyIsland:FindFirstChild("SpawnPointCrystal_Academy"),
+    ["Judgement"] = workspace:FindFirstChild("JudgementIsland") and workspace.JudgementIsland:FindFirstChild("SpawnPointCrystal_Judgement"),
+    ["SoulDominion"] = workspace:FindFirstChild("SoulDominionIsland") and workspace.SoulDominionIsland:FindFirstChild("SpawnPointCrystal_SoulDominion"),
+    ["NinjaIsland"] = workspace:FindFirstChild("NinjaIsland") and workspace.NinjaIsland:FindFirstChild("SpawnPointCrystal_Ninja"),
+    ["LawlessIsland"] = workspace:FindFirstChild("LawlessIsland") and workspace.LawlessIsland:FindFirstChild("SpawnPointCrystal_Lawless"),
+    ["TowerIsland"] = workspace:FindFirstChild("TowerIsland") and workspace.TowerIsland:FindFirstChild("SpawnPointCrystal_Tower"),
 }
 
-local function GetNearestIsland(pos)
-    local nearest, bestDist = nil, math.huge
-    for name, data in pairs(IslandMap) do
-        local d = (pos - data.CFrame.Position).Magnitude
-        if d < bestDist then bestDist = d; nearest = name end
-    end
-    return nearest
-end
+local SharedBossTIMap = {}
 
-local function GetIslandPos(name)
-    local data = IslandMap[name]
-    return data and data.CFrame.Position or Vector3.new(0, 27, 0)
+local function GetNearestIsland(targetPos, npcName)
+    if npcName and SharedBossTIMap[npcName] then
+        return SharedBossTIMap[npcName]
+    end
+    local nearestIslandName = "Starter"
+    local minDistance = math.huge
+    for islandName, crystal in pairs(IslandCrystals) do
+        if crystal then
+            local dist = (targetPos - crystal:GetPivot().Position).Magnitude
+            if dist < minDistance then
+                minDistance = dist
+                nearestIslandName = islandName
+            end
+        end
+    end
+    return nearestIslandName
 end
 
 local function TeleportIsland(islandName)
     if not Config.Movement.IslandTP then return false end
-    local pos = GetIslandPos(islandName)
-    local root = GetRoot()
-    if not root then return false end
-    if (root.Position - pos).Magnitude < 50 then return false end
-    TeleportTo(pos)
-    return true
+    if not islandName or islandName == "" or islandName == "Unknown" then return false end
+    if islandName == Shared.CurrentIsland then return false end
+    if Remotes.TP_Portal then
+        Remotes.TP_Portal:FireServer(islandName)
+        task.wait(tonumber(Config.Movement.IslandTPCD) or 0.67)
+        Shared.CurrentIsland = islandName
+        return true
+    end
+    return false
 end
 
 -- ============================================
@@ -294,6 +336,10 @@ local Shared = {
     WeapRotationIdx = 1,
     LastWeapSwitch = 0,
     LastIslandTP = 0,
+    LastTargetTP = 0,
+    QuestNPC = "",
+    CurrentIsland = "",
+    Target = nil,
 }
 
 local WeaponCache = { Sword = {}, Melee = {}, Fruit = {}, Gun = {} }
@@ -372,21 +418,259 @@ local function SwitchWeapon()
 end
 
 -- ============================================
+-- LEVEL RULES + QUEST (auto nhận quest)
+-- ============================================
+local function ApplyLevelRules()
+    local rules = Config.LevelRules
+    if not rules or rules.Enabled == false then return end
+    local lv = Plr.Data.Level.Value
+
+    local meleeMax = rules.MeleeOnlyLevelMax or 200
+    if lv <= meleeMax then
+        Config.MobFarm.WeaponTypes = { "Melee" }
+    else
+        Config.MobFarm.WeaponTypes = rules.WeaponTypesAfterMelee or SnapshotDefaultWeaponTypes
+    end
+
+    local mobMax = rules.MobSelectFarmLevelMax or 50
+    if lv <= mobMax then
+        Config.MobFarm.Enabled = true
+        Config.LevelFarm.AutoQuest = Config.LevelFarm.AutoQuest ~= false
+        Config.LevelFarm.UseForTargeting = false
+    else
+        if rules.DisableMobFarmAfterMobCap ~= false then
+            Config.MobFarm.Enabled = false
+        end
+        Config.LevelFarm.AutoQuest = false
+        if rules.EnableLevelFarmAfterMobCap ~= false then
+            Config.LevelFarm.Enabled = true
+            Config.LevelFarm.UseForTargeting = true
+        end
+    end
+end
+
+local function IsValidTargetFarm(npc)
+    if not npc or not npc.Parent then return false end
+    local hum = npc:FindFirstChildOfClass("Humanoid")
+    if not hum then return false end
+    local ik = Config.Instakill and Config.Instakill.Enabled
+    local minHP = tonumber(Config.Instakill and Config.Instakill.MinMaxHP) or 0
+    if ik and hum.MaxHealth >= minHP then
+        return hum.Health > 0 or npc == Shared.Target
+    end
+    return hum.Health > 0
+end
+
+local function IsSmartMatch(npcName, targetMobType)
+    local n = npcName:gsub("%d+$", ""):lower()
+    local t = (targetMobType or ""):lower()
+    if n == t then return true end
+    if t ~= "" and t:find(n, 1, true) == 1 then return true end
+    if n ~= "" and n:find(t, 1, true) == 1 then return true end
+    return false
+end
+
+local function GetBestMobCluster(mobNamesDictionary)
+    if type(mobNamesDictionary) ~= "table" then return nil end
+    local allMobs = {}
+    local clusterRadius = 35
+    for _, npc in pairs(PATH.Mobs:GetChildren()) do
+        if npc:IsA("Model") and npc:FindFirstChildOfClass("Humanoid") then
+            local cleanName = npc.Name:gsub("%d+$", "")
+            if mobNamesDictionary[cleanName] and IsValidTargetFarm(npc) then
+                table.insert(allMobs, npc)
+            end
+        end
+    end
+    if #allMobs == 0 then return nil end
+    local bestMob = allMobs[1]
+    local maxNearby = 0
+    for _, mobA in ipairs(allMobs) do
+        local nearbyCount = 0
+        local posA = mobA:GetPivot().Position
+        for _, mobB in ipairs(allMobs) do
+            if (posA - mobB:GetPivot().Position).Magnitude <= clusterRadius then
+                nearbyCount = nearbyCount + 1
+            end
+        end
+        if nearbyCount > maxNearby then
+            maxNearby = nearbyCount
+            bestMob = mobA
+        end
+    end
+    return bestMob
+end
+
+local function EnsureQuestSettings()
+    local ok, settings = pcall(function()
+        return PGui.SettingsUI.MainFrame.Frame.Content.SettingsTabFrame
+    end)
+    if not ok or not settings then return end
+    local tog1 = settings:FindFirstChild("Toggle_EnableQuestRepeat", true)
+    if tog1 and tog1.SettingsHolder.Off.Visible and Remotes.SettingsToggle then
+        Remotes.SettingsToggle:FireServer("EnableQuestRepeat", true)
+        task.wait(0.3)
+    end
+    local tog2 = settings:FindFirstChild("Toggle_AutoQuestRepeat", true)
+    if tog2 and tog2.SettingsHolder.Off.Visible and Remotes.SettingsToggle then
+        Remotes.SettingsToggle:FireServer("AutoQuestRepeat", true)
+    end
+end
+
+local function GetBestQuestNPC()
+    local QuestModule = Modules.Quests
+    if type(QuestModule.RepeatableQuests) ~= "table" then return "QuestNPC1" end
+    local playerLevel = Plr.Data.Level.Value
+    local bestNPC = "QuestNPC1"
+    local highestLevel = -1
+    for npcId, questData in pairs(QuestModule.RepeatableQuests) do
+        local reqLevel = questData.recommendedLevel or 0
+        if playerLevel >= reqLevel and reqLevel > highestLevel then
+            highestLevel = reqLevel
+            bestNPC = npcId
+        end
+    end
+    return bestNPC
+end
+
+local function UpdateQuestKaitun()
+    if not Config.LevelFarm.Enabled or not Config.LevelFarm.AutoQuest then return end
+    if not Remotes.QuestAccept or not Remotes.QuestAbandon then return end
+    local questUIHolder = PGui:FindFirstChild("QuestUI")
+    if not questUIHolder then return end
+    local questUI = questUIHolder:FindFirstChild("Quest")
+    if not questUI then return end
+
+    EnsureQuestSettings()
+    local targetNPC = GetBestQuestNPC()
+
+    if Shared.QuestNPC ~= targetNPC or not questUI.Visible then
+        Remotes.QuestAbandon:FireServer("repeatable")
+        local abandonTimeout = 0
+        while questUI.Visible and abandonTimeout < 15 do
+            task.wait(0.2)
+            abandonTimeout = abandonTimeout + 1
+        end
+        Remotes.QuestAccept:FireServer(targetNPC)
+        local acceptTimeout = 0
+        while not questUI.Visible and acceptTimeout < 20 do
+            task.wait(0.2)
+            acceptTimeout = acceptTimeout + 1
+            if acceptTimeout % 5 == 0 then
+                Remotes.QuestAccept:FireServer(targetNPC)
+            end
+        end
+        if questUI.Visible then
+            Shared.QuestNPC = targetNPC
+        end
+    end
+end
+
+local function GetLevelFarmTarget()
+    if not Config.LevelFarm.Enabled or not Config.LevelFarm.UseForTargeting then return nil end
+    pcall(UpdateQuestKaitun)
+
+    local questValid = false
+    local targetMobType = nil
+    local questUIHolder = PGui:FindFirstChild("QuestUI")
+    local questFrame = questUIHolder and questUIHolder:FindFirstChild("Quest")
+    if questFrame and questFrame.Visible then
+        local qData = Modules.Quests.RepeatableQuests and Modules.Quests.RepeatableQuests[Shared.QuestNPC]
+        if qData and qData.requirements and qData.requirements[1] then
+            targetMobType = qData.requirements[1].npcType
+            questValid = true
+        end
+    end
+
+    local matches = {}
+    for _, npc in pairs(PATH.Mobs:GetChildren()) do
+        if npc:IsA("Model") and npc:FindFirstChildOfClass("Humanoid") and IsValidTargetFarm(npc) then
+            local cleanName = npc.Name:gsub("%d+$", "")
+            local shouldInclude = false
+            if questValid and targetMobType then
+                if IsSmartMatch(npc.Name, targetMobType) then shouldInclude = true end
+            else
+                local name = npc.Name:lower()
+                if not name:find("boss") and not name:find("merchant") then
+                    shouldInclude = true
+                end
+            end
+            if shouldInclude then matches[cleanName] = true end
+        end
+    end
+
+    local bestMob = GetBestMobCluster(matches)
+    if bestMob then
+        local clean = bestMob.Name:gsub("%d+$", "")
+        return bestMob, GetNearestIsland(bestMob:GetPivot().Position, clean)
+    end
+    return nil
+end
+
+local function MoveToFarmPosition(target)
+    local root = GetRoot()
+    if not root or not target then return end
+    local npcRoot = target:FindFirstChild("HumanoidRootPart")
+    if not npcRoot then return end
+
+    local now = tick()
+    local tCD = tonumber(Config.Movement.TargetTPCD) or 0
+    if tCD > 0 and (now - Shared.LastTargetTP) < tCD then return end
+    Shared.LastTargetTP = now
+
+    local targetPivot = target:GetPivot()
+    local targetPos = targetPivot.Position
+    local distVal = tonumber(Config.Movement.Distance) or 6
+    local posType = Config.Movement.PositionType or "Behind"
+
+    local ik = target:FindFirstChild("IK_Active")
+    if ik and Config.Instakill and Config.Instakill.Enabled and (Config.Instakill.Type or "V2") == "V2" then
+        local startTime = ik:GetAttribute("TriggerTime") or 0
+        if tick() - startTime >= 3 then
+            root.CFrame = CFrame.new(targetPos + Vector3.new(0, 300, 0))
+            root.AssemblyLinearVelocity = Vector3.zero
+            return
+        end
+    end
+
+    local finalPos
+    if posType == "Above" then
+        finalPos = targetPos + Vector3.new(0, distVal, 0)
+    elseif posType == "Below" then
+        finalPos = targetPos + Vector3.new(0, -distVal, 0)
+    else
+        finalPos = (targetPivot * CFrame.new(0, 0, distVal)).Position
+    end
+
+    local finalDest = CFrame.lookAt(finalPos, targetPos)
+    local moveType = Config.Movement.Type or "Tween"
+    if moveType == "Teleport" then
+        root.CFrame = finalDest
+    else
+        local dist = (root.Position - finalPos).Magnitude
+        local speed = tonumber(Config.Movement.Speed) or 160
+        TweenService:Create(root, TweenInfo.new(dist / math.max(speed, 1), Enum.EasingStyle.Linear), { CFrame = finalDest }):Play()
+    end
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+end
+
+-- ============================================
 -- MOB TARGETING
 -- ============================================
 local function GetMobTarget()
     local selected = Config.MobFarm.SelectedMobs or {}
     if #selected == 0 then return nil end
-    
+
     if Shared.MobIdx > #selected then Shared.MobIdx = 1 end
     local targetName = selected[Shared.MobIdx]
-    
+
     local root = GetRoot()
     if not root then return nil end
-    
-    local bestNPC, bestDist = nil, 300
-    for _, npc in pairs(GetNPCs()) do
-        if npc.Name:lower():find(targetName:lower()) then
+
+    local bestNPC, bestDist = nil, 500
+    for _, npc in pairs(PATH.Mobs:GetChildren()) do
+        if npc:IsA("Model") and npc.Name:lower():find(targetName:lower()) and IsValidTargetFarm(npc) then
             local r = npc:FindFirstChild("HumanoidRootPart")
             if r then
                 local d = (root.Position - r.Position).Magnitude
@@ -394,23 +678,24 @@ local function GetMobTarget()
             end
         end
     end
-    
+
     if not bestNPC then
         Shared.MobIdx = Shared.MobIdx + 1
         return nil
     end
-    
-    return bestNPC, GetNearestIsland(bestNPC:GetPivot().Position)
+
+    local clean = bestNPC.Name:gsub("%d+$", "")
+    return bestNPC, GetNearestIsland(bestNPC:GetPivot().Position, clean)
 end
 
 local function GetAllMobTarget()
     local root = GetRoot()
     if not root then return nil end
-    
-    local bestNPC, bestDist = nil, 300
-    for _, npc in pairs(GetNPCs()) do
+
+    local bestNPC, bestDist = nil, 500
+    for _, npc in pairs(PATH.Mobs:GetChildren()) do
         local hum = npc:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health > 0 then
+        if hum and IsValidTargetFarm(npc) then
             local r = npc:FindFirstChild("HumanoidRootPart")
             if r then
                 local d = (root.Position - r.Position).Magnitude
@@ -418,7 +703,9 @@ local function GetAllMobTarget()
             end
         end
     end
-    return bestNPC, bestNPC and GetNearestIsland(bestNPC:GetPivot().Position)
+    if not bestNPC then return nil end
+    local clean = bestNPC.Name:gsub("%d+$", "")
+    return bestNPC, GetNearestIsland(bestNPC:GetPivot().Position, clean)
 end
 
 -- ============================================
@@ -429,14 +716,15 @@ local function GetBossTarget()
     local allBosses = Config.BossFarm.AllBosses or false
     local root = GetRoot()
     if not root then return nil end
-    
-    local bestNPC, bestDist = nil, 300
-    for _, npc in pairs(GetNPCs()) do
+
+    local bestNPC, bestDist = nil, 500
+    for _, npc in pairs(PATH.Mobs:GetChildren()) do
         local hum = npc:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health > 0 then
+        if hum and IsValidTargetFarm(npc) then
             local isBoss = npc.Name:lower():find("boss") and not npc.Name:lower():find("mini")
             if isBoss then
-                if allBosses or (#selected == 0) or table.find(selected, npc.Name) then
+                local clean = npc.Name:gsub("%d+$", "")
+                if allBosses or (#selected == 0) or table.find(selected, clean) or table.find(selected, npc.Name) then
                     local r = npc:FindFirstChild("HumanoidRootPart")
                     if r then
                         local d = (root.Position - r.Position).Magnitude
@@ -446,18 +734,19 @@ local function GetBossTarget()
             end
         end
     end
-    return bestNPC, bestNPC and GetNearestIsland(bestNPC:GetPivot().Position)
+    if not bestNPC then return nil end
+    local clean = bestNPC.Name:gsub("%d+$", "")
+    return bestNPC, GetNearestIsland(bestNPC:GetPivot().Position, clean)
 end
 
 -- ============================================
 -- MAIN FARM LOOP
 -- ============================================
 local function RunFarm()
+    ApplyLevelRules()
     local target, island = nil, nil
-    local mode = Config.FarmMode or "Mob"
-    
-    -- Try priority system
-    local priorities = Config.Priority or {"Mob"}
+    local priorities = Config.Priority or { "Mob" }
+
     for _, taskType in ipairs(priorities) do
         if taskType == "Mob" and Config.MobFarm.Enabled then
             local t, i = GetMobTarget()
@@ -465,69 +754,37 @@ local function RunFarm()
         elseif taskType == "All Mob Farm" and Config.MobFarm.Enabled then
             local t, i = GetAllMobTarget()
             if t then target, island = t, i; break end
-        elseif taskType == "Boss" and Config.BossFarm.Enabled then
+        elseif taskType == "Boss" and Config.BossFarm and Config.BossFarm.Enabled then
             local t, i = GetBossTarget()
+            if t then target, island = t, i; break end
+        elseif taskType == "Level Farm" then
+            local t, i = GetLevelFarmTarget()
             if t then target, island = t, i; break end
         end
     end
-    
-    -- Fallback if no priority target
+
     if not target then
-        target, island = GetMobTarget()
-        if not target then
-            target, island = GetAllMobTarget()
-        end
-    end
-    
-    if not target then
-        task.wait(0.5)
+        Shared.Target = nil
+        task.wait(0.35)
         return
     end
-    
-    local npcRoot = target:FindFirstChild("HumanoidRootPart")
-    if not npcRoot then return end
-    
-    -- Teleport island if needed
+
+    Shared.Target = target
+
+    local cleanName = target.Name:gsub("%d+$", "")
+    if not island then
+        island = GetNearestIsland(target:GetPivot().Position, cleanName)
+    end
+
     local now = tick()
-    if island and Config.Movement.IslandTP and (now - Shared.LastIslandTP) > (Config.Movement.IslandTPCD or 1) then
+    if island and Config.Movement.IslandTP and (now - Shared.LastIslandTP) > (tonumber(Config.Movement.IslandTPCD) or 0.67) then
         if TeleportIsland(island) then
             Shared.LastIslandTP = now
-            task.wait(1)
+            task.wait(0.5)
         end
     end
-    
-    -- Move to target
-    local playerRoot = GetRoot()
-    if playerRoot then
-        local targetPos = npcRoot.Position
-        local posType = Config.Movement.PositionType or "Front"
-        local dist = Config.Movement.Distance or 10
-        
-        local finalPos
-        if posType == "Above" then
-            finalPos = targetPos + Vector3.new(0, dist, 0)
-        elseif posType == "Below" then
-            finalPos = targetPos + Vector3.new(0, -dist, 0)
-        else
-            finalPos = targetPos + Vector3.new(0, 0, -dist)
-        end
-        
-        TeleportTo(finalPos)
-    end
-    
-    -- Instakill check (basic)
-    if Config.Instakill and Config.Instakill.Enabled then
-        local hum = target:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health < hum.MaxHealth * 0.3 then
-            -- Already damaged target, teleport on top
-            local playerRoot = GetRoot()
-            if playerRoot then
-                playerRoot.CFrame = CFrame.new(npcRoot.Position + Vector3.new(0, 300, 0))
-            end
-        end
-    end
-    
-    -- Switch weapon periodically
+
+    MoveToFarmPosition(target)
     SwitchWeapon()
 end
 
@@ -581,7 +838,8 @@ task.spawn(function()
             LastLevel = currentLevel
             
             -- Stop condition
-            if Config.Misc.StopConditions.Level > 0 and currentLevel >= Config.Misc.StopConditions.Level then
+            local sc = Config.Misc and Config.Misc.StopConditions
+            if sc and sc.Level > 0 and currentLevel >= sc.Level then
                 Log("Reached target level " .. currentLevel .. "! Stopping...")
                 getgenv().Kaitun_Running = false
                 break
@@ -598,13 +856,14 @@ task.spawn(function()
             mode, target, currentLevel, sessTime))
         
         -- Check stop conditions
-        if Config.Misc.StopConditions.Money > 0 and currentMoney >= Config.Misc.StopConditions.Money then
+        local sc2 = Config.Misc and Config.Misc.StopConditions
+        if sc2 and sc2.Money > 0 and currentMoney >= sc2.Money then
             Log("Reached target money! Stopping...")
             getgenv().Kaitun_Running = false
             break
         end
         
-        if Config.Misc.StopConditions.Gems > 0 and currentGems >= Config.Misc.StopConditions.Gems then
+        if sc2 and sc2.Gems > 0 and currentGems >= sc2.Gems then
             Log("Reached target gems! Stopping...")
             getgenv().Kaitun_Running = false
             break
@@ -615,7 +874,7 @@ end)
 -- ============================================
 -- ANTI-AFK
 -- ============================================
-if Config.Misc.AntiAFK ~= false then
+if (Config.Misc and Config.Misc.AntiAFK) ~= false then
     task.spawn(function()
         local VirtualUser = Services.VirtualUser
         while getgenv().Kaitun_Running do
@@ -661,10 +920,24 @@ function StartLoops()
         M1Loop = task.spawn(function()
             while getgenv().Kaitun_Running do
                 pcall(RunAutoM1)
-                task.wait(Config.AutoFeatures.M1Speed or 0.35)
+                local sp = tonumber(Config.AutoFeatures.M1Speed)
+                if sp == nil then sp = 0.35 end
+                task.wait(math.max(0.03, sp))
             end
         end)
     end
+
+    task.spawn(function()
+        while getgenv().Kaitun_Running do
+            task.wait(5)
+            pcall(function()
+                ApplyLevelRules()
+                if Config.LevelFarm.AutoQuest then
+                    UpdateQuestKaitun()
+                end
+            end)
+        end
+    end)
     
     -- Auto Haki
     local haki = Config.AutoFeatures.Haki or {}
