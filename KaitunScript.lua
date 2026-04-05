@@ -25,6 +25,13 @@ local function LoadConfig()
 end
 
 Config = LoadConfig()
+
+-- Fallback: đọc từ global getgenv().KAITUN_CFG
+if not Config and type(getgenv().KAITUN_CFG) == "table" then
+    Config = getgenv().KAITUN_CFG
+    print("[Kaitun] Da lay config tu getgenv().KAITUN_CFG (loader global)")
+end
+
 if not Config then
     warn("[Kaitun] Failed to load config! Using default settings.")
     Config = {
