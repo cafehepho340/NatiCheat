@@ -42,7 +42,16 @@ if not Config then
         AutoFeatures = { M1 = true, M1Speed = 0.35, Haki = { Observation = false, Armament = false, Conqueror = false } },
         Movement = { Type = "Tween", Speed = 160, PositionType = "Behind", Distance = 6, IslandTP = true, IslandTPCD = 0.67, TargetTPCD = 0 },
         LevelFarm = { Enabled = true, AutoQuest = true, UseForTargeting = false },
-        LevelRules = { Enabled = true, MobSelectFarmLevelMax = 50, MeleeOnlyLevelMax = 200 },
+        LevelRules = {
+            Enabled = true,
+            EarlyMobMaxLevel = 49,
+            MidMobMaxLevel = 400,
+            EarlySelectedMobs = { "Thief" },
+            MidSelectedMobs = { "ThiefBoss" },
+            NotBossMobNames = { "ThiefBoss" },
+            MeleeOnlyLevelMax = 200,
+            MobSelectFarmLevelMax = 400,
+        },
         Misc = { AntiAFK = true, StopConditions = { Level = 0, Money = 0, Gems = 0 } }
     }
 end
@@ -139,6 +148,33 @@ local function Log(msg)
     local lvl = Plr.Data.Level.Value
     local sess = GetSessionTime()
     print(string.format("[Kaitun %s | Lvl %d | %s] %s", Config.ScriptName or "Kaitun", lvl, sess, msg))
+end
+
+-- table.concat lỗi nếu [1] là nil (Priority thưa / config lệch)
+local function SafeConcatStrings(t, sep)
+    sep = sep or ", "
+    if type(t) ~= "table" then return "" end
+    local parts = {}
+    local maxKey = 0
+    for k in pairs(t) do
+        if type(k) == "number" and k > maxKey then maxKey = k end
+    end
+    for i = 1, maxKey do
+        local v = t[i]
+        if v ~= nil then
+            parts[#parts + 1] = tostring(v)
+        end
+    end
+    if #parts > 0 then
+        return table.concat(parts, sep)
+    end
+    for _, v in pairs(t) do
+        if type(v) == "string" or type(v) == "number" then
+            parts[#parts + 1] = tostring(v)
+        end
+    end
+    table.sort(parts)
+    return #parts > 0 and table.concat(parts, sep) or ""
 end
 
 local function LogWarn(msg)
@@ -358,18 +394,49 @@ local function SyncInventory()
     end
 end
 
+local function FindInventoryFolder()
+    local dataFolder = Plr:FindFirstChild("Data")
+    if not dataFolder then return nil end
+    local altNames = { "Inventory", "Items", "ItemInventory", "Weapons" }
+    for _, name in ipairs(altNames) do
+        local ch = dataFolder:FindFirstChild(name)
+        if ch then return ch end
+    end
+    return nil
+end
+
 local function CacheWeapons()
     WeaponCache = { Sword = {}, Melee = {}, Fruit = {}, Gun = {} }
-    if Plr.Data and Plr.Data.Inventory then
-        for _, item in pairs(Plr.Data.Inventory:GetChildren()) do
+    local ok, err = pcall(function()
+        local dataFolder = Plr:FindFirstChild("Data")
+        if not dataFolder then return end
+
+        local inv = FindInventoryFolder()
+        for _ = 1, 80 do
+            if inv then break end
+            task.wait(0.25)
+            inv = FindInventoryFolder()
+        end
+
+        if not inv then return end
+
+        for _, item in ipairs(inv:GetChildren()) do
             if item:IsA("ModuleScript") then
-                local data = require(item)
-                local t = data and data.ToolType or "Unknown"
-                if WeaponCache[t] then
-                    table.insert(WeaponCache[t], item.Name)
+                local okReq, data = pcall(require, item)
+                if okReq and type(data) == "table" then
+                    local t = data.ToolType or "Unknown"
+                    if WeaponCache[t] then
+                        table.insert(WeaponCache[t], item.Name)
+                    end
                 end
             end
         end
+    end)
+
+    if not ok then
+        LogWarn("CacheWeapons: " .. tostring(err))
+    elseif #WeaponCache.Sword + #WeaponCache.Melee + #WeaponCache.Fruit + #WeaponCache.Gun == 0 then
+        LogWarn("Khong tim thay Data.Inventory (hoac ten khac) — xoay vu khi co the khong hoat dong")
     end
     Log("Weapons cached: Sword=" .. #WeaponCache.Sword .. " Melee=" .. #WeaponCache.Melee)
 end
@@ -439,16 +506,27 @@ local function ApplyLevelRules()
         Config.MobFarm.WeaponTypes = rules.WeaponTypesAfterMelee or SnapshotDefaultWeaponTypes
     end
 
-    local mobMax = rules.MobSelectFarmLevelMax or 50
-    if lv <= mobMax then
+    -- Hết cap lv này thì chuyển Level Farm (ưu tiên MidMobMaxLevel / MobFarmSelectMaxLevel)
+    local cap = rules.MidMobMaxLevel or rules.MobFarmSelectMaxLevel or rules.MobSelectFarmLevelMax or 400
+    local earlyMax = rules.EarlyMobMaxLevel or 49
+
+    if lv <= cap then
         Config.MobFarm.Enabled = true
-        Config.LevelFarm.AutoQuest = Config.LevelFarm.AutoQuest ~= false
+        if lv <= earlyMax then
+            Config.MobFarm.SelectedMobs = rules.EarlySelectedMobs or { "Thief" }
+            Config.LevelFarm.AutoQuest = rules.EarlyAutoQuest ~= false
+        else
+            -- lv 50–400: farm mob tên *Boss nhưng là mob thường (vd ThiefBoss)
+            Config.MobFarm.SelectedMobs = rules.MidSelectedMobs or { "ThiefBoss" }
+            Config.LevelFarm.AutoQuest = rules.MidAutoQuest ~= false
+        end
         Config.LevelFarm.UseForTargeting = false
     else
         if rules.DisableMobFarmAfterMobCap ~= false then
             Config.MobFarm.Enabled = false
         end
-        Config.LevelFarm.AutoQuest = false
+        -- Sau cap vẫn nhận nhiệm vụ (tắt: AfterCapAutoQuest = false)
+        Config.LevelFarm.AutoQuest = rules.AfterCapAutoQuest ~= false
         if rules.EnableLevelFarmAfterMobCap ~= false then
             Config.LevelFarm.Enabled = true
             Config.LevelFarm.UseForTargeting = true
@@ -466,6 +544,28 @@ local function IsValidTargetFarm(npc)
         return hum.Health > 0 or npc == Shared.Target
     end
     return hum.Health > 0
+end
+
+-- Tên có chữ "Boss" nhưng là mob farm (không dùng nhánh farm boss thật)
+local function GetNotBossMobNames()
+    local rules = Config.LevelRules
+    local list = (rules and rules.NotBossMobNames) or { "ThiefBoss" }
+    return list
+end
+
+local function IsWhitelistedNonBossMob(cleanName)
+    local lower = cleanName:lower()
+    for _, n in ipairs(GetNotBossMobNames()) do
+        if lower == (tostring(n)):lower() then return true end
+    end
+    return false
+end
+
+local function IsActualGameBoss(npc)
+    local clean = npc.Name:gsub("%d+$", "")
+    if IsWhitelistedNonBossMob(clean) then return false end
+    local name = npc.Name:lower()
+    return name:find("boss") and not name:find("mini")
 end
 
 local function IsSmartMatch(npcName, targetMobType)
@@ -598,7 +698,9 @@ local function GetLevelFarmTarget()
                 if IsSmartMatch(npc.Name, targetMobType) then shouldInclude = true end
             else
                 local name = npc.Name:lower()
-                if not name:find("boss") and not name:find("merchant") then
+                local cleanN = npc.Name:gsub("%d+$", "")
+                local looksBoss = name:find("boss") and not name:find("mini")
+                if (not looksBoss or IsWhitelistedNonBossMob(cleanN)) and not name:find("merchant") then
                     shouldInclude = true
                 end
             end
@@ -702,7 +804,7 @@ local function GetAllMobTarget()
     local bestNPC, bestDist = nil, 500
     for _, npc in pairs(PATH.Mobs:GetChildren()) do
         local hum = npc:FindFirstChildOfClass("Humanoid")
-        if hum and IsValidTargetFarm(npc) then
+        if hum and IsValidTargetFarm(npc) and not IsActualGameBoss(npc) then
             local r = npc:FindFirstChild("HumanoidRootPart")
             if r then
                 local d = (root.Position - r.Position).Magnitude
@@ -728,8 +830,7 @@ local function GetBossTarget()
     for _, npc in pairs(PATH.Mobs:GetChildren()) do
         local hum = npc:FindFirstChildOfClass("Humanoid")
         if hum and IsValidTargetFarm(npc) then
-            local isBoss = npc.Name:lower():find("boss") and not npc.Name:lower():find("mini")
-            if isBoss then
+            if IsActualGameBoss(npc) then
                 local clean = npc.Name:gsub("%d+$", "")
                 if allBosses or (#selected == 0) or table.find(selected, clean) or table.find(selected, npc.Name) then
                     local r = npc:FindFirstChild("HumanoidRootPart")
@@ -907,7 +1008,7 @@ local HakiLoop = nil
 function StartLoops()
     Log("Starting Kaitun Script...")
     Log("Mode: " .. (Config.FarmMode or "Mob"))
-    Log("Priority: " .. table.concat(Config.Priority or {}, ", "))
+    Log("Priority: " .. SafeConcatStrings(Config.Priority or {}, ", "))
     
     -- Init
     SyncInventory()
